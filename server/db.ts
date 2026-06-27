@@ -52,6 +52,7 @@ export async function insertMeal(
     imageUrl?: string;
     mealType?: string;
     analysis: MealAnalysis;
+    portionMultiplier?: number;
   },
 ) {
   const a = data.analysis;
@@ -68,7 +69,31 @@ export async function insertMeal(
       carbsG: a.carbs_g,
       fatG: a.fat_g,
       foodItems: a.foodItems,
+      portionMultiplier: data.portionMultiplier ?? 1,
     })
+    .returning();
+  return rows[0];
+}
+
+// 删除一餐（限本人）
+export async function deleteMeal(db: DbClient, userId: number, id: number) {
+  await db
+    .delete(schema.meals)
+    .where(and(eq(schema.meals.id, id), eq(schema.meals.userId, userId)));
+  return { id };
+}
+
+// 修改份量倍数（限本人）——「份量可修正」真正回写
+export async function updateMealPortion(
+  db: DbClient,
+  userId: number,
+  id: number,
+  portionMultiplier: number,
+) {
+  const rows = await db
+    .update(schema.meals)
+    .set({ portionMultiplier })
+    .where(and(eq(schema.meals.id, id), eq(schema.meals.userId, userId)))
     .returning();
   return rows[0];
 }

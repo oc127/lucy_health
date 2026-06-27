@@ -1,7 +1,8 @@
 import { View, Text, Pressable, SectionList, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useMealHistory, type HistoryMeal } from "../lib/data";
+import { useMealHistory, useDeleteMeal, type HistoryMeal } from "../lib/data";
+import { MealRow } from "../components/meal-row";
 import { Colors } from "../constants/theme";
 
 // 按天分组餐食历史
@@ -23,6 +24,7 @@ function groupByDay(meals: HistoryMeal[]) {
 export default function MealHistory() {
   const router = useRouter();
   const historyQ = useMealHistory(30);
+  const deleteMeal = useDeleteMeal();
   const sections = groupByDay(historyQ.data ?? []);
 
   return (
@@ -58,19 +60,7 @@ export default function MealHistory() {
             </View>
           )}
           renderItem={({ item }) => (
-            <View className="mb-2 flex-row items-center justify-between rounded-2xl bg-white px-4 py-3">
-              <View className="flex-1 pr-2">
-                <Text className="font-medium text-gray-800" numberOfLines={1}>
-                  {item.foodItems.join("、") || "餐食"}
-                </Text>
-                <Text className="text-xs text-gray-400">
-                  {item.mealType ?? "餐食"} · {Math.round(item.calories)} kcal
-                </Text>
-              </View>
-              <Text className="font-bold text-protein">
-                {Math.round(item.proteinG)}g
-              </Text>
-            </View>
+            <MealRow meal={item} onDelete={(id) => deleteMeal.mutate(id)} />
           )}
         />
       )}

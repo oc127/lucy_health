@@ -6,7 +6,6 @@ import {
   text,
   real,
   timestamp,
-  date,
   jsonb,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -71,20 +70,6 @@ export const meals = pgTable("meals", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// ---- daily_summaries：每日营养汇总（第一阶段实时聚合为主，此表预留）----
-export const dailySummaries = pgTable("daily_summaries", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  date: date("date").notNull(),
-  totalCalories: real("total_calories").default(0).notNull(),
-  totalProtein: real("total_protein").default(0).notNull(),
-  totalFiber: real("total_fiber").default(0).notNull(),
-  totalCarbs: real("total_carbs").default(0).notNull(),
-  totalFat: real("total_fat").default(0).notNull(),
-  proteinGap: real("protein_gap").default(0).notNull(),
-});
 
 // ---- weights：体重记录（趋势用）----
 export const weights = pgTable("weights", {
@@ -128,6 +113,5 @@ export type MealAnalysis = {
 export type User = typeof users.$inferSelect;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type Meal = typeof meals.$inferSelect;
-export type DailySummary = typeof dailySummaries.$inferSelect;
 export type Weight = typeof weights.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;

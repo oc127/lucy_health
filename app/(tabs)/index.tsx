@@ -3,7 +3,8 @@ import { useRouter } from "expo-router";
 import { ScreenContainer } from "../../components/screen-container";
 import { ProteinRing } from "../../components/protein-ring";
 import { MacroCard } from "../../components/macro-card";
-import { useDailySummary, useTodayMeals } from "../../lib/data";
+import { MealRow } from "../../components/meal-row";
+import { useDailySummary, useTodayMeals, useDeleteMeal } from "../../lib/data";
 import { useAuth } from "../../lib/auth-context";
 import { Colors } from "../../constants/theme";
 
@@ -12,6 +13,7 @@ export default function Dashboard() {
   const { mode } = useAuth();
   const summaryQ = useDailySummary();
   const mealsQ = useTodayMeals();
+  const deleteMeal = useDeleteMeal();
 
   const s = summaryQ.data?.summary;
   const targets = summaryQ.data?.targets;
@@ -79,24 +81,14 @@ export default function Dashboard() {
       <View className="mt-6">
         <Text className="mb-2 text-base font-semibold text-gray-800">今日餐食</Text>
         {mealsQ.data && mealsQ.data.length > 0 ? (
-          mealsQ.data.map((m) => (
-            <View
-              key={m.id}
-              className="mb-2 flex-row items-center justify-between rounded-2xl bg-white px-4 py-3 shadow-sm"
-            >
-              <View className="flex-1 pr-2">
-                <Text className="font-medium text-gray-800" numberOfLines={1}>
-                  {m.foodItems.join("、") || "餐食"}
-                </Text>
-                <Text className="text-xs text-gray-400">
-                  {m.mealType ?? "餐食"} · {Math.round(m.calories)} kcal
-                </Text>
-              </View>
-              <Text className="font-bold text-protein">
-                {Math.round(m.proteinG)}g 蛋白
-              </Text>
-            </View>
-          ))
+          <>
+            {mealsQ.data.map((m) => (
+              <MealRow key={m.id} meal={m} onDelete={(id) => deleteMeal.mutate(id)} />
+            ))}
+            <Text className="mt-1 text-center text-[11px] text-gray-300">
+              长按某一餐可删除
+            </Text>
+          </>
         ) : (
           <View className="items-center rounded-2xl bg-white py-8">
             <Text className="text-sm text-gray-400">还没有记录，拍一餐开始吧</Text>

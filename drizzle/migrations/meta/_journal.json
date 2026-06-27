@@ -15,6 +15,13 @@
       "when": 1782563005795,
       "tag": "0001_futuristic_moondragon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782564125027,
+      "tag": "0002_loud_colonel_america",
+      "breakpoints": true
     }
   ]
 }

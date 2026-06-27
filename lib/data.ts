@@ -3,6 +3,7 @@ import { useAuth } from "./auth-context";
 import { vanillaTrpc } from "./trpc";
 import * as local from "./local-store";
 import type { ProfileUpdate } from "../server/db";
+import type { MealAnalysis } from "../drizzle/schema";
 import {
   checkCompliance,
   CRISIS_RESPONSE,
@@ -23,32 +24,54 @@ export function useDailySummary() {
   });
 }
 
+// 餐食列表项（calories/proteinG 已乘以份量倍数，可直接展示）。
+export type MealListItem = {
+  id: number;
+  mealType?: string;
+  foodItems: string[];
+  calories: number;
+  proteinG: number;
+  portionMultiplier: number;
+  imageUrl?: string;
+  createdAt: Date;
+};
+
 export function useTodayMeals() {
   const { mode, isReady } = useAuth();
-  return useQuery({
+  return useQuery<MealListItem[]>({
     queryKey: ["todayMeals", mode],
     enabled: isReady,
     queryFn: async () => {
       if (mode === "online") {
         const rows = await vanillaTrpc.meals.today.query({});
-        return rows.map((m) => ({
-          id: m.id,
-          mealType: m.mealType ?? undefined,
-          foodItems: m.foodItems ?? [],
-          calories: m.calories ?? 0,
-          proteinG: m.proteinG ?? 0,
-          createdAt: m.createdAt,
-        }));
+        return rows.map((m) => {
+          const mult = m.portionMultiplier ?? 1;
+          return {
+            id: m.id,
+            mealType: m.mealType ?? undefined,
+            foodItems: m.foodItems ?? [],
+            calories: (m.calories ?? 0) * mult,
+            proteinG: (m.proteinG ?? 0) * mult,
+            portionMultiplier: mult,
+            imageUrl: m.imageUrl ?? undefined,
+            createdAt: m.createdAt,
+          };
+        });
       }
       const rows = await local.getLocalTodayMeals();
-      return rows.map((m) => ({
-        id: m.id,
-        mealType: m.mealType,
-        foodItems: m.analysis.foodItems,
-        calories: m.analysis.calories,
-        proteinG: m.analysis.protein_g,
-        createdAt: new Date(m.createdAt),
-      }));
+      return rows.map((m) => {
+        const mult = m.portionMultiplier ?? 1;
+        return {
+          id: m.id,
+          mealType: m.mealType,
+          foodItems: m.analysis.foodItems,
+          calories: m.analysis.calories * mult,
+          proteinG: m.analysis.protein_g * mult,
+          portionMultiplier: mult,
+          imageUrl: m.imageUrl,
+          createdAt: new Date(m.createdAt),
+        };
+      });
     },
   });
 }
@@ -114,39 +137,92 @@ export function useUpdateProfile() {
   });
 }
 
+// 仅分析（不写库）—— 用户确认/调份量后再调 useCreateMeal 保存。
 export function useAnalyzeMeal() {
   const { mode } = useAuth();
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { imageBase64: string; mealType?: string }) => {
+    mutationFn: async (input: {
+      imageBase64: string;
+      mealType?: string;
+    }): Promise<MealAnalysis> => {
       if (mode === "online") {
         const res = await vanillaTrpc.meals.analyze.mutate(input);
         return res.analysis;
       }
-      // 本地模式：直接在前端无法调用多模态模型，使用后端无关的 mock 分析。
+      // 本地模式无法调用多模态模型，返回确定性 mock。
       const { analyzeMealMock } = await import("./mock-analysis");
-      const analysis = analyzeMealMock(input.mealType);
-      await local.addLocalMeal(analysis, input.mealType);
-      return analysis;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["dailySummary"] });
-      qc.invalidateQueries({ queryKey: ["todayMeals"] });
-      qc.invalidateQueries({ queryKey: ["mealHistory"] });
-      qc.invalidateQueries({ queryKey: ["trend"] });
+      return analyzeMealMock(input.mealType);
     },
   });
 }
 
+function invalidateMeals(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["dailySummary"] });
+  qc.invalidateQueries({ queryKey: ["todayMeals"] });
+  qc.invalidateQueries({ queryKey: ["mealHistory"] });
+  qc.invalidateQueries({ queryKey: ["trend"] });
+}
+
+// 保存一餐（带份量与图片）。
+export function useCreateMeal() {
+  const { mode } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      analysis: MealAnalysis;
+      mealType?: string;
+      portionMultiplier?: number;
+      imageUrl?: string;
+    }): Promise<void> => {
+      if (mode === "online") {
+        await vanillaTrpc.meals.create.mutate(input);
+      } else {
+        await local.addLocalMeal(input.analysis, {
+          mealType: input.mealType,
+          portionMultiplier: input.portionMultiplier,
+          imageUrl: input.imageUrl,
+        });
+      }
+    },
+    onSuccess: () => invalidateMeals(qc),
+  });
+}
+
+export function useDeleteMeal() {
+  const { mode } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number): Promise<void> => {
+      if (mode === "online") {
+        await vanillaTrpc.meals.delete.mutate({ id });
+      } else {
+        await local.deleteLocalMeal(id);
+      }
+    },
+    onSuccess: () => invalidateMeals(qc),
+  });
+}
+
+export function useUpdateMealPortion() {
+  const { mode } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: number;
+      portionMultiplier: number;
+    }): Promise<void> => {
+      if (mode === "online") {
+        await vanillaTrpc.meals.updatePortion.mutate(input);
+      } else {
+        await local.updateLocalMealPortion(input.id, input.portionMultiplier);
+      }
+    },
+    onSuccess: () => invalidateMeals(qc),
+  });
+}
+
 // ---- 餐食历史 ----
-export type HistoryMeal = {
-  id: number;
-  mealType?: string;
-  foodItems: string[];
-  calories: number;
-  proteinG: number;
-  createdAt: Date;
-};
+export type HistoryMeal = MealListItem;
 
 export function useMealHistory(days = 14) {
   const { mode, isReady } = useAuth();
@@ -156,24 +232,34 @@ export function useMealHistory(days = 14) {
     queryFn: async () => {
       if (mode === "online") {
         const rows = await vanillaTrpc.meals.history.query({ days });
-        return rows.map((m) => ({
-          id: m.id,
-          mealType: m.mealType ?? undefined,
-          foodItems: m.foodItems ?? [],
-          calories: m.calories ?? 0,
-          proteinG: m.proteinG ?? 0,
-          createdAt: m.createdAt,
-        }));
+        return rows.map((m) => {
+          const mult = m.portionMultiplier ?? 1;
+          return {
+            id: m.id,
+            mealType: m.mealType ?? undefined,
+            foodItems: m.foodItems ?? [],
+            calories: (m.calories ?? 0) * mult,
+            proteinG: (m.proteinG ?? 0) * mult,
+            portionMultiplier: mult,
+            imageUrl: m.imageUrl ?? undefined,
+            createdAt: m.createdAt,
+          };
+        });
       }
       const rows = await local.getLocalMealHistory(days);
-      return rows.map((m) => ({
-        id: m.id,
-        mealType: m.mealType,
-        foodItems: m.analysis.foodItems,
-        calories: m.analysis.calories,
-        proteinG: m.analysis.protein_g,
-        createdAt: new Date(m.createdAt),
-      }));
+      return rows.map((m) => {
+        const mult = m.portionMultiplier ?? 1;
+        return {
+          id: m.id,
+          mealType: m.mealType,
+          foodItems: m.analysis.foodItems,
+          calories: m.analysis.calories * mult,
+          proteinG: m.analysis.protein_g * mult,
+          portionMultiplier: mult,
+          imageUrl: m.imageUrl,
+          createdAt: new Date(m.createdAt),
+        };
+      });
     },
   });
 }

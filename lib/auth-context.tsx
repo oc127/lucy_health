@@ -66,6 +66,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const data = (await res.json()) as { token: string };
           await setStoredToken(data.token);
           setMode("online");
+          // 上线后把离线累积的数据迁移到云端（失败不阻断启动，下次重试）。
+          try {
+            const { migrateLocalToCloud } = await import("./migrate");
+            await migrateLocalToCloud();
+          } catch (e) {
+            console.warn("[migrate] 本地数据迁移失败，将在下次启动重试", e);
+          }
         } else {
           setMode("local");
         }

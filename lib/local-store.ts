@@ -21,6 +21,8 @@ export type LocalMeal = {
   id: number;
   mealType?: string;
   analysis: MealAnalysis;
+  portionMultiplier: number;
+  imageUrl?: string;
   createdAt: string; // ISO
 };
 
@@ -29,6 +31,11 @@ const DEFAULT_PROFILE: LocalProfile = {
   proteinTarget: 100,
   calorieTarget: 1800,
 };
+
+// 迁移到云端后清空本地业务数据（保留 deviceId / onboarding 等会话状态）。
+export async function clearLocalData(): Promise<void> {
+  await AsyncStorage.multiRemove([PROFILE_KEY, MEALS_KEY, WEIGHTS_KEY, CHAT_KEY]);
+}
 
 export async function getLocalProfile(): Promise<LocalProfile> {
   const raw = await AsyncStorage.getItem(PROFILE_KEY);
@@ -51,19 +58,40 @@ async function readMeals(): Promise<LocalMeal[]> {
 
 export async function addLocalMeal(
   analysis: MealAnalysis,
-  mealType?: string,
+  opts?: { mealType?: string; portionMultiplier?: number; imageUrl?: string },
 ): Promise<LocalMeal> {
   const meals = await readMeals();
   const meal: LocalMeal = {
     id: Date.now(),
-    mealType,
+    mealType: opts?.mealType,
     analysis,
+    portionMultiplier: opts?.portionMultiplier ?? 1,
+    imageUrl: opts?.imageUrl,
     createdAt: new Date().toISOString(),
   };
   meals.unshift(meal);
   // 只保留最近 200 条，避免无限增长
   await AsyncStorage.setItem(MEALS_KEY, JSON.stringify(meals.slice(0, 200)));
   return meal;
+}
+
+export async function deleteLocalMeal(id: number): Promise<void> {
+  const meals = await readMeals();
+  await AsyncStorage.setItem(
+    MEALS_KEY,
+    JSON.stringify(meals.filter((m) => m.id !== id)),
+  );
+}
+
+export async function updateLocalMealPortion(
+  id: number,
+  portionMultiplier: number,
+): Promise<void> {
+  const meals = await readMeals();
+  const next = meals.map((m) =>
+    m.id === id ? { ...m, portionMultiplier } : m,
+  );
+  await AsyncStorage.setItem(MEALS_KEY, JSON.stringify(next));
 }
 
 function isSameDay(a: Date, b: Date): boolean {
@@ -86,11 +114,12 @@ export async function getLocalDailySummary(day = new Date()) {
   ]);
   const sum = meals.reduce(
     (acc, m) => {
-      acc.calories += m.analysis.calories;
-      acc.protein += m.analysis.protein_g;
-      acc.fiber += m.analysis.fiber_g;
-      acc.carbs += m.analysis.carbs_g;
-      acc.fat += m.analysis.fat_g;
+      const mult = m.portionMultiplier ?? 1;
+      acc.calories += m.analysis.calories * mult;
+      acc.protein += m.analysis.protein_g * mult;
+      acc.fiber += m.analysis.fiber_g * mult;
+      acc.carbs += m.analysis.carbs_g * mult;
+      acc.fat += m.analysis.fat_g * mult;
       return acc;
     },
     { calories: 0, protein: 0, fiber: 0, carbs: 0, fat: 0 },
@@ -138,8 +167,9 @@ export async function getLocalTrend(days = 7): Promise<LocalTrendPoint[]> {
   for (const m of meals) {
     const bucket = byDay.get(toKey(new Date(m.createdAt)));
     if (!bucket) continue;
-    bucket.protein += m.analysis.protein_g;
-    bucket.calories += m.analysis.calories;
+    const mult = m.portionMultiplier ?? 1;
+    bucket.protein += m.analysis.protein_g * mult;
+    bucket.calories += m.analysis.calories * mult;
   }
   return Array.from(byDay.entries()).map(([date, v]) => ({
     date,

@@ -5,6 +5,8 @@ import {
   getProfile,
   upsertProfile,
   insertMeal,
+  deleteMeal,
+  updateMealPortion,
   getMealsByDay,
   getDailySummary,
   getMealHistory,
@@ -21,6 +23,20 @@ import {
   MEDICAL_DISCLAIMER_SUFFIX,
 } from "./_core/compliance";
 import type { MealAnalysis } from "../drizzle/schema";
+
+// 餐食分析结果的校验 schema（meals.create 入参）。
+const mealAnalysisSchema = z.object({
+  foodItems: z.array(z.string()),
+  calories: z.number(),
+  protein_g: z.number(),
+  fiber_g: z.number(),
+  carbs_g: z.number(),
+  fat_g: z.number(),
+  portionAssumption: z.string(),
+  confidence: z.enum(["low", "medium", "high"]),
+  micronutrients: z.record(z.string()).optional(),
+  notes: z.string(),
+});
 
 // Mira 营养分析 System Prompt —— 蛋白质优先、非评判、给出份量假设与置信度。
 const MEAL_ANALYSIS_PROMPT = `你是 Mira，一个懂营养的好朋友，专门服务 GLP-1 药物使用者（如 Ozempic、Wegovy、Mounjaro、Zepbound）。
@@ -182,6 +198,7 @@ export const appRouter = router({
   }),
 
   meals: router({
+    // 仅分析，不写库 —— 让用户先确认/调份量再保存。
     analyze: protectedProcedure
       .input(
         z.object({
@@ -189,14 +206,39 @@ export const appRouter = router({
           mealType: z.string().optional(),
         }),
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ input }) => {
         const analysis = await analyzeMealImage(input.imageBase64, input.mealType);
-        const meal = await insertMeal(ctx.db, ctx.userId, {
-          mealType: input.mealType,
-          analysis,
-        });
-        return { meal, analysis };
+        return { analysis };
       }),
+
+    // 用户确认后保存（带份量倍数与图片）。
+    create: protectedProcedure
+      .input(
+        z.object({
+          analysis: mealAnalysisSchema,
+          mealType: z.string().optional(),
+          imageUrl: z.string().optional(),
+          portionMultiplier: z.number().positive().max(10).optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        insertMeal(ctx.db, ctx.userId, {
+          analysis: input.analysis,
+          mealType: input.mealType,
+          imageUrl: input.imageUrl,
+          portionMultiplier: input.portionMultiplier,
+        }),
+      ),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(({ ctx, input }) => deleteMeal(ctx.db, ctx.userId, input.id)),
+
+    updatePortion: protectedProcedure
+      .input(z.object({ id: z.number(), portionMultiplier: z.number().positive().max(10) }))
+      .mutation(({ ctx, input }) =>
+        updateMealPortion(ctx.db, ctx.userId, input.id, input.portionMultiplier),
+      ),
 
     today: protectedProcedure
       .input(z.object({ date: z.string().optional() }).optional())

@@ -10,7 +10,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "../../components/screen-container";
-import { useAnalyzeMeal } from "../../lib/data";
+import { useAnalyzeMeal, useCreateMeal } from "../../lib/data";
 import { Colors } from "../../constants/theme";
 import type { MealAnalysis } from "../../drizzle/schema";
 
@@ -26,10 +26,19 @@ const PORTIONS = [0.5, 1, 1.5, 2];
 export default function LogMeal() {
   const router = useRouter();
   const analyze = useAnalyzeMeal();
+  const createMeal = useCreateMeal();
   const [mealType, setMealType] = useState("lunch");
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageData, setImageData] = useState<string | null>(null);
   const [result, setResult] = useState<MealAnalysis | null>(null);
   const [portion, setPortion] = useState(1);
+
+  const reset = () => {
+    setResult(null);
+    setImageUri(null);
+    setImageData(null);
+    setPortion(1);
+  };
 
   const pickFrom = async (source: "camera" | "library") => {
     setResult(null);
@@ -58,6 +67,7 @@ export default function LogMeal() {
     const base64 = asset.base64
       ? `data:image/jpeg;base64,${asset.base64}`
       : asset.uri;
+    setImageData(base64);
 
     try {
       const analysis = await analyze.mutateAsync({
@@ -68,6 +78,22 @@ export default function LogMeal() {
       setPortion(1);
     } catch (e) {
       Alert.alert("分析失败", (e as Error).message);
+    }
+  };
+
+  const save = async () => {
+    if (!result) return;
+    try {
+      await createMeal.mutateAsync({
+        analysis: result,
+        mealType,
+        portionMultiplier: portion,
+        imageUrl: imageData ?? imageUri ?? undefined,
+      });
+      reset();
+      router.push("/(tabs)");
+    } catch (e) {
+      Alert.alert("保存失败", (e as Error).message);
     }
   };
 
@@ -193,12 +219,23 @@ export default function LogMeal() {
             </View>
           ) : null}
 
-          <Pressable
-            onPress={() => router.push("/(tabs)")}
-            className="mt-4 items-center rounded-2xl bg-primary-500 py-3 active:bg-primary-600"
-          >
-            <Text className="font-semibold text-white">完成，回到今日</Text>
-          </Pressable>
+          <View className="mt-4 flex-row gap-3">
+            <Pressable
+              onPress={reset}
+              className="items-center justify-center rounded-2xl bg-gray-100 px-5 py-3"
+            >
+              <Text className="font-semibold text-gray-500">丢弃</Text>
+            </Pressable>
+            <Pressable
+              onPress={save}
+              disabled={createMeal.isPending}
+              className="flex-1 items-center rounded-2xl bg-primary-500 py-3 active:bg-primary-600"
+            >
+              <Text className="font-semibold text-white">
+                {createMeal.isPending ? "保存中…" : `保存（${portion} 份）`}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
     </ScreenContainer>
