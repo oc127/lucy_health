@@ -7,7 +7,19 @@ import {
   insertMeal,
   getMealsByDay,
   getDailySummary,
+  getMealHistory,
+  getTrend,
+  addWeight,
+  listWeights,
+  addChatMessage,
+  getChatHistory,
 } from "./db";
+import {
+  MIRA_CHAT_SYSTEM_PROMPT,
+  checkCompliance,
+  CRISIS_RESPONSE,
+  MEDICAL_DISCLAIMER_SUFFIX,
+} from "./_core/compliance";
 import type { MealAnalysis } from "../drizzle/schema";
 
 // Mira 营养分析 System Prompt —— 蛋白质优先、非评判、给出份量假设与置信度。
@@ -100,6 +112,52 @@ export async function analyzeMealImage(
   }
 }
 
+// 生成 Mira 聊天回复（经医疗合规护栏）。
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+export async function generateChatReply(
+  userMessage: string,
+  history: ChatTurn[],
+  profileHint?: string,
+): Promise<{ content: string; flagged: "medical" | "crisis" | null }> {
+  const check = checkCompliance(userMessage);
+
+  // 危机情形：不调用模型，直接给稳妥引导。
+  if (check.level === "crisis") {
+    return { content: CRISIS_RESPONSE, flagged: "crisis" };
+  }
+
+  // 无 LLM provider：给出友好的占位回复（本地/无 key 时仍可演示聊天）。
+  if (getProvider() === "none") {
+    const base =
+      "我在呢～现在是离线示例模式，配置 AI key 后我就能和你好好聊营养啦。先记得多补充蛋白质和水分哦 💧";
+    return {
+      content:
+        check.level === "medical" ? base + MEDICAL_DISCLAIMER_SUFFIX : base,
+      flagged: check.level === "medical" ? "medical" : null,
+    };
+  }
+
+  const recent = history.slice(-10);
+  const raw = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content:
+          MIRA_CHAT_SYSTEM_PROMPT +
+          (profileHint ? `\n\n用户背景（仅供参考）：${profileHint}` : ""),
+      },
+      ...recent,
+      { role: "user", content: userMessage },
+    ],
+    maxTokens: 512,
+  });
+
+  const content =
+    check.level === "medical" ? raw.trim() + MEDICAL_DISCLAIMER_SUFFIX : raw.trim();
+  return { content, flagged: check.level === "medical" ? "medical" : null };
+}
+
 export const appRouter = router({
   health: publicProcedure.query(() => ({
     ok: true,
@@ -152,6 +210,62 @@ export const appRouter = router({
       .query(({ ctx, input }) => {
         const day = input?.date ? new Date(input.date) : new Date();
         return getDailySummary(ctx.db, ctx.userId, day);
+      }),
+
+    history: protectedProcedure
+      .input(z.object({ days: z.number().min(1).max(90).optional() }).optional())
+      .query(({ ctx, input }) =>
+        getMealHistory(ctx.db, ctx.userId, input?.days ?? 14),
+      ),
+
+    trend: protectedProcedure
+      .input(z.object({ days: z.number().min(1).max(30).optional() }).optional())
+      .query(({ ctx, input }) =>
+        getTrend(ctx.db, ctx.userId, input?.days ?? 7),
+      ),
+  }),
+
+  weights: router({
+    list: protectedProcedure.query(({ ctx }) => listWeights(ctx.db, ctx.userId)),
+    add: protectedProcedure
+      .input(z.object({ weightLb: z.number().positive(), note: z.string().optional() }))
+      .mutation(({ ctx, input }) =>
+        addWeight(ctx.db, ctx.userId, input.weightLb, input.note),
+      ),
+  }),
+
+  chat: router({
+    history: protectedProcedure.query(({ ctx }) =>
+      getChatHistory(ctx.db, ctx.userId),
+    ),
+    send: protectedProcedure
+      .input(z.object({ message: z.string().min(1).max(2000) }))
+      .mutation(async ({ ctx, input }) => {
+        const [profile, history] = await Promise.all([
+          getProfile(ctx.db, ctx.userId),
+          getChatHistory(ctx.db, ctx.userId),
+        ]);
+        const profileHint = profile
+          ? `药物：${profile.glp1Drug ?? "未填"}；阶段：${profile.dosageStage ?? "未填"}；蛋白目标：${profile.proteinTarget}g/天`
+          : undefined;
+
+        await addChatMessage(ctx.db, ctx.userId, "user", input.message);
+        const reply = await generateChatReply(
+          input.message,
+          history.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+          profileHint,
+        );
+        const saved = await addChatMessage(
+          ctx.db,
+          ctx.userId,
+          "assistant",
+          reply.content,
+          reply.flagged ?? undefined,
+        );
+        return saved;
       }),
   }),
 });

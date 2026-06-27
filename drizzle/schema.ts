@@ -86,6 +86,30 @@ export const dailySummaries = pgTable("daily_summaries", {
   proteinGap: real("protein_gap").default(0).notNull(),
 });
 
+// ---- weights：体重记录（趋势用）----
+export const weights = pgTable("weights", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  weightLb: real("weight_lb").notNull(),
+  note: text("note"),
+  recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+});
+
+// ---- chat_messages：Mira AI 陪伴聊天记录 ----
+export const chatMessages = pgTable("chat_messages", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role", { length: 16 }).notNull(), // user | assistant
+  content: text("content").notNull(),
+  // 合规标记：该回复是否触发了医疗护栏（被改写/附加免责）
+  flagged: varchar("flagged", { length: 16 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // AI 餐食分析结果结构（也用于前端类型）
 export type MealAnalysis = {
   foodItems: string[];
@@ -105,3 +129,5 @@ export type User = typeof users.$inferSelect;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type Meal = typeof meals.$inferSelect;
 export type DailySummary = typeof dailySummaries.$inferSelect;
+export type Weight = typeof weights.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeSummary } from "../server/db";
-import { parseAnalysis, analyzeMealImage } from "../server/routers";
+import { computeSummary, buildTrend } from "../server/db";
+import {
+  parseAnalysis,
+  analyzeMealImage,
+  generateChatReply,
+} from "../server/routers";
+import { checkCompliance } from "../server/_core/compliance";
 
 describe("computeSummary — 蛋白质优先汇总", () => {
   it("聚合多餐宏量并计算蛋白质缺口", () => {
@@ -87,5 +92,66 @@ describe("analyzeMealImage — 无 LLM provider 时降级 mock", () => {
     expect(a.protein_g).toBeGreaterThan(0);
     expect(a.foodItems.length).toBeGreaterThan(0);
     expect(["low", "medium", "high"]).toContain(a.confidence);
+  });
+});
+
+describe("buildTrend — 营养趋势按天聚合", () => {
+  it("生成连续 7 天且把当天餐食归到当天", () => {
+    const now = new Date();
+    const meals = [
+      { createdAt: now, proteinG: 30, calories: 400 },
+      { createdAt: now, proteinG: 20, calories: 300 },
+    ];
+    const t = buildTrend(meals, 7);
+    expect(t).toHaveLength(7);
+    // 最后一个点是今天，蛋白质应为 50
+    expect(t[t.length - 1].protein).toBe(50);
+    expect(t[t.length - 1].calories).toBe(700);
+    // 之前的天没有数据 → 0
+    expect(t[0].protein).toBe(0);
+  });
+
+  it("应用 portionMultiplier", () => {
+    const t = buildTrend(
+      [{ createdAt: new Date(), proteinG: 40, calories: 500, portionMultiplier: 0.5 }],
+      3,
+    );
+    expect(t[t.length - 1].protein).toBe(20);
+  });
+});
+
+describe("checkCompliance — 医疗护栏识别", () => {
+  it("剂量相关问题标记为 medical", () => {
+    expect(checkCompliance("我应该加量到 1mg 吗？").level).toBe("medical");
+    expect(checkCompliance("这个副作用正常吗").level).toBe("medical");
+  });
+
+  it("危机/严重症状标记为 crisis", () => {
+    expect(checkCompliance("我持续呕吐而且剧烈腹痛").level).toBe("crisis");
+    expect(checkCompliance("我不想活了").level).toBe("crisis");
+  });
+
+  it("普通营养问题不触发护栏", () => {
+    expect(checkCompliance("早餐吃什么蛋白质高？").level).toBe("none");
+  });
+});
+
+describe("generateChatReply — 合规优先 + 无 LLM 降级", () => {
+  it("危机消息直接返回安全引导且不调用模型", async () => {
+    const r = await generateChatReply("我想结束这一切", []);
+    expect(r.flagged).toBe("crisis");
+    expect(r.content).toContain("急救");
+  });
+
+  it("医疗问题在无 key 时附加就医提示并标记 medical", async () => {
+    const r = await generateChatReply("我该减量吗", []);
+    expect(r.flagged).toBe("medical");
+    expect(r.content).toContain("医生");
+  });
+
+  it("普通问题在无 key 时给出友好占位回复", async () => {
+    const r = await generateChatReply("今天该多吃点什么", []);
+    expect(r.flagged).toBeNull();
+    expect(r.content.length).toBeGreaterThan(0);
   });
 });

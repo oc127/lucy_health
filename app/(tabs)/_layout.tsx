@@ -2,8 +2,6 @@ import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "../../constants/theme";
 
-// 第一阶段两个 Tab：首页（营养仪表盘）+ 记录（拍照分析）。
-// 聊天 / 设置 留到第二阶段。
 export default function TabsLayout() {
   return (
     <Tabs
@@ -29,6 +27,33 @@ export default function TabsLayout() {
           title: "记录",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="camera" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="trends"
+        options={{
+          title: "趋势",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="trending-up" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="chat"
+        options={{
+          title: "Mira",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubble-ellipses" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: "我的",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person" color={color} size={size} />
           ),
         }}
       />

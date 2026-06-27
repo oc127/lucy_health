@@ -161,3 +161,145 @@ export async function getDailySummary(
     profile?.calorieTarget ?? 1800,
   );
 }
+
+// ---- 餐食历史（最近 N 天，按时间倒序）----
+export async function getMealHistory(
+  db: DbClient,
+  userId: number,
+  days = 14,
+) {
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  since.setHours(0, 0, 0, 0);
+  return db
+    .select()
+    .from(schema.meals)
+    .where(
+      and(
+        eq(schema.meals.userId, userId),
+        gte(schema.meals.createdAt, since),
+      ),
+    )
+    .orderBy(desc(schema.meals.createdAt));
+}
+
+// ---- 营养趋势：最近 N 天每天的蛋白质 / 热量汇总 ----
+export type TrendPoint = {
+  date: string; // YYYY-MM-DD
+  protein: number;
+  calories: number;
+};
+
+export function buildTrend(
+  meals: {
+    createdAt: Date;
+    proteinG?: number | null;
+    calories?: number | null;
+    portionMultiplier?: number | null;
+  }[],
+  days: number,
+): TrendPoint[] {
+  const byDay = new Map<string, { protein: number; calories: number }>();
+  // 预填最近 days 天（含今天），保证趋势连续
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    byDay.set(toDateKey(d), { protein: 0, calories: 0 });
+  }
+  for (const m of meals) {
+    const key = toDateKey(new Date(m.createdAt));
+    const bucket = byDay.get(key);
+    if (!bucket) continue;
+    const mult = m.portionMultiplier ?? 1;
+    bucket.protein += (m.proteinG ?? 0) * mult;
+    bucket.calories += (m.calories ?? 0) * mult;
+  }
+  return Array.from(byDay.entries()).map(([date, v]) => ({
+    date,
+    protein: Math.round(v.protein),
+    calories: Math.round(v.calories),
+  }));
+}
+
+function toDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export async function getTrend(db: DbClient, userId: number, days = 7) {
+  const since = new Date();
+  since.setDate(since.getDate() - (days - 1));
+  since.setHours(0, 0, 0, 0);
+  const meals = await db
+    .select({
+      createdAt: schema.meals.createdAt,
+      proteinG: schema.meals.proteinG,
+      calories: schema.meals.calories,
+      portionMultiplier: schema.meals.portionMultiplier,
+    })
+    .from(schema.meals)
+    .where(
+      and(eq(schema.meals.userId, userId), gte(schema.meals.createdAt, since)),
+    );
+  return buildTrend(meals, days);
+}
+
+// ---- 体重记录 ----
+export async function addWeight(
+  db: DbClient,
+  userId: number,
+  weightLb: number,
+  note?: string,
+) {
+  const rows = await db
+    .insert(schema.weights)
+    .values({ userId, weightLb, note })
+    .returning();
+  // 同步更新档案里的当前体重
+  await db
+    .update(schema.userProfiles)
+    .set({ weightCurrent: weightLb, updatedAt: new Date() })
+    .where(eq(schema.userProfiles.userId, userId));
+  return rows[0];
+}
+
+export async function listWeights(db: DbClient, userId: number, limit = 60) {
+  return db
+    .select()
+    .from(schema.weights)
+    .where(eq(schema.weights.userId, userId))
+    .orderBy(desc(schema.weights.recordedAt))
+    .limit(limit);
+}
+
+// ---- 聊天记录 ----
+export async function addChatMessage(
+  db: DbClient,
+  userId: number,
+  role: "user" | "assistant",
+  content: string,
+  flagged?: string,
+) {
+  const rows = await db
+    .insert(schema.chatMessages)
+    .values({ userId, role, content, flagged })
+    .returning();
+  return rows[0];
+}
+
+export async function getChatHistory(
+  db: DbClient,
+  userId: number,
+  limit = 50,
+) {
+  const rows = await db
+    .select()
+    .from(schema.chatMessages)
+    .where(eq(schema.chatMessages.userId, userId))
+    .orderBy(desc(schema.chatMessages.createdAt))
+    .limit(limit);
+  return rows.reverse(); // 返回时按时间正序
+}
